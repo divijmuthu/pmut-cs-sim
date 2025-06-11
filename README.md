@@ -1,3 +1,5 @@
+check m files
+
 # Single-Element Ultrasound Imaging with Compressed Sensing
 William Meng  
 wlmeng@stanford.edu  
