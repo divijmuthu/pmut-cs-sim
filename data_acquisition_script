@@ -1,0 +1,168 @@
+# This is the complete, final script for data collection. It programmatically
+# sets the correct trigger on Channel B, captures the data, and saves both
+# the raw waveform data (.h5) and the corresponding random delay
+# profiles (.csv) needed for MATLAB reconstruction.
+# =========================================================================
+
+
+import ctypes
+import time
+import numpy as np
+import serial
+import h5py
+from datetime import datetime
+import os
+
+
+from picosdk.ps5000a import ps5000a as ps
+from picosdk.functions import assert_pico_ok
+
+# --- Hardware & File Settings ---
+ARDUINO_PORT = 'COM12'
+OUTPUT_DATA_DIR = 'experiment_results'
+
+# --- Acquisition Settings ---
+NUM_ACQUISITIONS = 30
+MAX_DELAY_US = 100.0
+
+# --- PicoScope Configuration ---
+# Channel A (Data Channel)
+CH_A_RANGE_ENUM = ps.PS5000A_RANGE['PS5000A_500MV']
+
+# Channel B (External Trigger Channel)
+CH_B_RANGE_ENUM = ps.PS5000A_RANGE['PS5000A_20V']
+CH_B_RANGE_MV = 20000
+TRIGGER_THRESHOLD_MV = 5000
+
+# Common Settings
+RESOLUTION = ps.PS5000A_DEVICE_RESOLUTION['PS5000A_DR_14BIT'] # Use 16-bit as confirmed by diagnostics
+TIMEBASE = 4
+TOTAL_SAMPLES = 416700
+PRE_TRIGGER_SAMPLES = int(0.1 * TOTAL_SAMPLES)
+POST_TRIGGER_SAMPLES = TOTAL_SAMPLES - PRE_TRIGGER_SAMPLES
+
+
+# --- Other Physical Constants ---
+ARDUINO_TICK_TO_US = 8.62
+NUM_PMUTS = 3
+
+# --- Callback function for blocking mode ---
+got_data = ctypes.c_int16(0)
+def data_ready_callback(handle, status, pParameter):
+    global got_data
+    got_data.value = 1
+
+BlockReadyType = ctypes.CFUNCTYPE(None, ctypes.c_int16, ctypes.c_int16, ctypes.c_void_p)
+c_data_ready_callback = BlockReadyType(data_ready_callback)
+
+if __name__ == '__main__':
+    # Use your original one-shot Arduino sketch for this script
+    arduino = None
+    chandle = ctypes.c_int16()
+
+    try:
+        # --- Prepare Files and Delays ---
+        if not os.path.exists(OUTPUT_DATA_DIR):
+            os.makedirs(OUTPUT_DATA_DIR)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        output_h5_filename = os.path.join(OUTPUT_DATA_DIR, f'data_{timestamp}.h5')
+        output_csv_filename = os.path.join(OUTPUT_DATA_DIR, f'delays_{timestamp}.csv') # Define CSV filename
+        print(f"Data will be saved to: {output_h5_filename}")
+        print(f"Delays will be saved to: {output_csv_filename}")
+
+        print("--- Generating Delay Profiles ---")
+        max_delay_ticks = int(MAX_DELAY_US / ARDUINO_TICK_TO_US)
+        delay_profiles_ticks = np.random.randint(0, max_delay_ticks + 1, size=(NUM_ACQUISITIONS, NUM_PMUTS))
+        delay_profiles_us = delay_profiles_ticks * ARDUINO_TICK_TO_US
+        # Save the generated delays to the CSV file
+        np.savetxt(output_csv_filename, delay_profiles_us, delimiter=',', fmt='%.4f', header='Delay1_us,Delay2_us,Delay3_us', comments='')
+        print(f"Generated and saved {NUM_ACQUISITIONS} random delay profiles.")
+
+        # --- Connect and Explicitly Configure PicoScope ---
+        # wanted to use existing settings but easier to do some config then filter later
+        print("\n--- Connecting and Configuring PicoScope ---")
+        status = {}
+        status["openunit"] = ps.ps5000aOpenUnit(ctypes.byref(chandle), None, RESOLUTION)
+        assert_pico_ok(status["openunit"])
+
+        status["setChA"] = ps.ps5000aSetChannel(chandle, ps.PS5000A_CHANNEL['PS5000A_CHANNEL_A'], 1, ps.PS5000A_COUPLING['PS5000A_DC'], CH_A_RANGE_ENUM, 0)
+        assert_pico_ok(status["setChA"])
+       
+        status["setChB"] = ps.ps5000aSetChannel(chandle, ps.PS5000A_CHANNEL['PS5000A_CHANNEL_B'], 1, ps.PS5000A_COUPLING['PS5000A_DC'], CH_B_RANGE_ENUM, 0)
+        assert_pico_ok(status["setChB"])
+       
+        max_adc = ctypes.c_int16()
+        status["maximumValue"] = ps.ps5000aMaximumValue(chandle, ctypes.byref(max_adc))
+        assert_pico_ok(status["maximumValue"])
+       
+        trigger_adc_level = int((TRIGGER_THRESHOLD_MV / CH_B_RANGE_MV) * max_adc.value)
+        status["setSimpleTrigger"] = ps.ps5000aSetSimpleTrigger(chandle, 1, ps.PS5000A_CHANNEL['PS5000A_CHANNEL_B'], trigger_adc_level, ps.PS5000A_THRESHOLD_DIRECTION['PS5000A_RISING'], 0, 0)
+        assert_pico_ok(status["setSimpleTrigger"])
+        print(f"Trigger correctly set on Channel B (+/-{CH_B_RANGE_MV/1000}V range), rising past {TRIGGER_THRESHOLD_MV}mV.")
+
+        # --- Connect to Arduino ---
+        print("\n--- Initializing Arduino ---")
+        arduino = serial.Serial(ARDUINO_PORT, 115200, timeout=1)
+        time.sleep(2)
+        print(f"Arduino connected.")
+
+        # --- Run Data Acquisition Loop ---
+        print("\n--- Starting Data Acquisition Loop ---")
+        all_echo_data = []
+       
+        bufferA = (ctypes.c_int16 * TOTAL_SAMPLES)()
+        status["setDataBufferA"] = ps.ps5000aSetDataBuffer(chandle, ps.PS5000A_CHANNEL['PS5000A_CHANNEL_A'], ctypes.byref(bufferA), TOTAL_SAMPLES, 0, 0)
+        assert_pico_ok(status["setDataBufferA"])
+
+        for i in range(NUM_ACQUISITIONS):
+            profile = delay_profiles_ticks[i]
+            command = f"D,{profile[0]},{profile[1]},{profile[2]}\n"
+            arduino.write(command.encode())
+            time.sleep(0.05)
+
+            got_data.value = 0
+            status["runBlock"] = ps.ps5000aRunBlock(chandle, PRE_TRIGGER_SAMPLES, POST_TRIGGER_SAMPLES, TIMEBASE, ctypes.byref(ctypes.c_int32()), 0, c_data_ready_callback, None)
+            assert_pico_ok(status["runBlock"])
+
+            print(f"Acquisition {i+1}/{NUM_ACQUISITIONS}... Firing...", end='', flush=True)
+            arduino.write(b'F\n')
+
+
+            while got_data.value == 0:
+                time.sleep(0.01)
+           
+            overflow = ctypes.c_int16()
+            cmaxSamples = ctypes.c_int32(TOTAL_SAMPLES)
+            status["getValues"] = ps.ps5000aGetValues(chandle, 0, ctypes.byref(cmaxSamples), 0, 0, 0, ctypes.byref(overflow))
+            assert_pico_ok(status["getValues"])
+           
+            all_echo_data.append(np.array(bufferA[:]))
+            print(" Done.")
+            time.sleep(0.1)
+
+        # --- Save Data ---
+        print("\n--- Saving Raw Data ---")
+        with h5py.File(output_h5_filename, 'w') as f:
+            f.create_dataset('echo_data_raw_adc', data=np.array(all_echo_data))
+        print(f"Successfully saved data to {output_h5_filename}")
+
+
+    except Exception as e:
+        print(f"\nAN ERROR OCCURRED: {e}")
+   
+    finally:
+        print("\n--- Cleaning up hardware connections ---")
+        if arduino and arduino.is_open:
+            arduino.close()
+            print("Arduino connection closed.")
+        if chandle.value > 0:
+            ps.ps5000aStop(chandle)
+            ps.ps5000aCloseUnit(chandle)
+            print("PicoScope connection closed.")
+
+
+
+
+
+
+
