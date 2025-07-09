@@ -1,0 +1,119 @@
+# Post-Processing Filter & Viewer
+# =========================================================================
+
+import h5py
+import numpy as np
+import matplotlib.pyplot as plt
+import tkinter as tk
+from tkinter import filedialog
+from scipy.signal import butter, lfilter
+
+# --- Filter Configuration ---
+FILTER_CUTOFF_HZ = 60000 # 80 khz fine, 60 khz very accurate
+FILTER_ORDER = 4
+
+def apply_lowpass_filter(data, cutoff, fs, order=5):
+    """Applies a low-pass Butterworth filter to the data."""
+    nyquist = 0.5 * fs
+    normal_cutoff = cutoff / nyquist
+    b, a = butter(order, normal_cutoff, btype='low', analog=False)
+    y = lfilter(b, a, data)
+    return y
+
+def select_file():
+    """Opens a file dialog to select a .h5 file."""
+    root = tk.Tk()
+    root.withdraw()
+    filepath = filedialog.askopenfilename(title="Select HDF5 Data File", filetypes=(("HDF5 files", "*.h5"),))
+    return filepath
+
+def main():
+    filepath = select_file()
+    if not filepath:
+        print("No file selected. Exiting.")
+        return
+
+    print(f"Loading data from: {filepath}")
+
+    try:
+        voltage_range_mv = float(input("Enter voltage range in mV (e.g., 500): "))
+        resolution_bits = int(input("Enter bit-resolution (e.g., 16): "))
+        max_adc_value = (2**resolution_bits) / 2 - 1
+    except ValueError:
+        print("Invalid input. Exiting.")
+        return
+
+    with h5py.File(filepath, 'r') as f:
+        if 'echo_data_raw_adc' not in f:
+            print("Error: Dataset 'echo_data_raw_adc' not found.")
+            return
+        raw_adc_data = f['echo_data_raw_adc'][:]
+
+    # --- Data Conversion ---
+    data_mv = (raw_adc_data / max_adc_value) * voltage_range_mv
+   
+    sample_interval_s = 24e-9
+    fs = 1 / sample_interval_s
+
+    # --- DIAGNOSTIC REPORT ---
+    print("\n-------------------------------------------")
+    print("--- DIAGNOSTIC REPORT ---")
+    print(f"Shape of raw ADC data: {raw_adc_data.shape}")
+    print(f"Max value in raw ADC data: {np.max(raw_adc_data)}")
+    print(f"Min value in raw ADC data: {np.min(raw_adc_data)}")
+    print("---")
+    print(f"Voltage range entered (mV): {voltage_range_mv}")
+    print(f"Bit-resolution entered: {resolution_bits}")
+    print(f"Calculated Max ADC Value: {max_adc_value}")
+    print("---")
+    print(f"Max value in converted data (mV): {np.max(data_mv)}")
+    print(f"Min value in converted data (mV): {np.min(data_mv)}")
+    print("-------------------------------------------\n")
+
+    # --- Create the time axis ---
+    total_samples = data_mv.shape[1]
+    pre_trigger_samples = int(0.1 * total_samples)
+    time_ms = (np.arange(total_samples) - pre_trigger_samples) * (sample_interval_s * 1000)
+
+    # --- Plot Individual Filtered Acquisitions ---
+    print("Plotting first 4 individual filtered acquisitions...")
+    fig, axs = plt.subplots(2, 2, figsize=(15, 10), sharex=True, sharey=True)
+    fig.suptitle('First 4 Individual Filtered Acquisitions', fontsize=16)
+
+    for i, ax in enumerate(axs.flat):
+        if i < len(data_mv):
+            filtered_mv = apply_lowpass_filter(data_mv[i], FILTER_CUTOFF_HZ, fs, FILTER_ORDER)
+            ax.plot(time_ms, filtered_mv)
+            ax.set_title(f'Acquisition #{i+1}')
+            ax.grid(True)
+        if i >= 2:
+             ax.set_xlabel('Time (ms)')
+        if i % 2 == 0:
+            ax.set_ylabel('Amplitude (mV)')
+           
+    plt.show()
+
+    print("Plotting the average of all acquisitions...")
+    averaged_noisy_mv = np.mean(data_mv, axis=0)
+    averaged_filtered_mv = apply_lowpass_filter(averaged_noisy_mv, FILTER_CUTOFF_HZ, fs, FILTER_ORDER)
+   
+    plt.figure(figsize=(15, 7))
+    plt.plot(time_ms, averaged_filtered_mv, label=f'Filtered Data ({int(FILTER_CUTOFF_HZ/1000)} kHz Cutoff)', color='blue')
+    plt.plot(time_ms, averaged_noisy_mv, label='Original Noisy Data (Averaged)', color='red', alpha=0.3)
+    plt.title('Average of All Acquisitions (Filtered vs. Noisy)')
+    plt.xlabel('Time (ms)')
+    plt.ylabel('Amplitude (mV)')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+
+if __name__ == '__main__':
+    main()
+
+
+
+
+
+
+
