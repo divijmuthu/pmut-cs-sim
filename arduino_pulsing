@@ -1,0 +1,154 @@
+/**
+ * @file pMUT_Controller_v3_Continuous.ino
+ * @brief Drives a 3-element pMUT array with individual time delays.
+ * This version generates a continuous pulse train upon command, allowing
+ * the controlling PC to manage the pulse duration.
+ *
+ * Serial Command Format:
+ * 'D,<d0>,<d1>,<d2>\n' -> Update the delay profile.
+ * 'F\n' -> START firing a continuous train of pulses.
+ * 'S\n' -> STOP firing the pulse train.
+ */
+
+
+// --- Pin Definitions (for Port A on Arduino Mega) ---
+#define PIN_CH0 PA7 // Arduino Pin 22
+#define PIN_CH1 PA6 // Arduino Pin 23
+#define PIN_CH2 PA5 // Arduino Pin 24
+const uint8_t pinMask = (1 << PIN_CH0) | (1 << PIN_CH1) | (1 << PIN_CH2);
+
+
+// --- Delay Profile ---
+volatile uint16_t delayProfile[3] = {0, 0, 0}; // Default to zero delay
+
+
+// --- Burst & Repetition Parameters ---
+const uint8_t cyclesPerBurst = 2;
+// This determines the pulse repetition frequency (PRF).
+// 16MHz clock / 138 timer counts = ~115.9 kHz ISR frequency.
+// 115900 / 2318 = ~50 Hz PRF. This is a good starting point.
+const uint16_t repetitionPeriodTicks = 2318;
+
+
+// --- State Tracking Variables ---
+volatile bool enablePulsing = false; // Master switch for pulsing
+volatile uint16_t master_ticks = 0;
+volatile uint8_t halfCyclesDone[3] = {0, 0, 0};
+
+
+void setup() {
+  Serial.begin(115200);
+  DDRA |= pinMask;
+  PORTA &= ~pinMask; // Ensure pins are low initially
+
+
+  // Configure Timer1 for high-frequency interrupts
+  TCCR1A = 0;
+  TCCR1B = 0;
+  TCCR1B |= (1 << WGM12) | (1 << CS10); // CTC mode, no prescaler
+  OCR1A = 137; // 16,000,000 / (137 + 1) = ~115.9 kHz ISR frequency
+  TIMSK1 |= (1 << OCIE1A); // Enable Timer1 Compare A interrupt
+ 
+  sei(); // Enable global interrupts
+}
+
+
+void loop() {
+  if (Serial.available() > 0) {
+    char command = Serial.read();
+
+
+    if (command == 'D') { // 'D' for Delay Profile
+      bool wasPulsing = enablePulsing;
+      if (wasPulsing) enablePulsing = false; // Safely pause pulsing to update
+     
+      delayProfile[0] = Serial.parseInt();
+      delayProfile[1] = Serial.parseInt();
+      delayProfile[2] = Serial.parseInt();
+     
+      Serial.print("ACK: Delays set to ");
+      Serial.print(delayProfile[0]); Serial.print(", ");
+      Serial.print(delayProfile[1]); Serial.print(", ");
+      Serial.println(delayProfile[2]);
+
+
+      if (wasPulsing) enablePulsing = true; // Resume if it was on
+    }
+    else if (command == 'F') { // 'F' to start Firing
+      if (!enablePulsing) {
+        master_ticks = 0; // Reset ticks on new fire command
+        enablePulsing = true;
+      }
+    }
+    else if (command == 'S') { // 'S' to Stop
+      enablePulsing = false;
+    }
+   
+    // Clear any remaining characters in the buffer
+    while(Serial.available() > 0) Serial.read();
+  }
+}
+
+
+ISR(TIMER1_COMPA_vect) {
+  if (!enablePulsing) {
+    PORTA &= ~pinMask; // Ensure pins are off
+    return;
+  }
+
+
+  // If we are at the start of a new repetition period, reset the burst state
+  if (master_ticks == 0) {
+    for (int i = 0; i < 3; i++) {
+      halfCyclesDone[i] = 0;
+    }
+  }
+
+
+  // --- Channel 0 Firing Logic ---
+  if (master_ticks >= delayProfile[0]) {
+    if (halfCyclesDone[0] < (cyclesPerBurst * 2)) {
+      PORTA ^= (1 << PIN_CH0); // Toggle the pin
+      halfCyclesDone[0]++;
+    } else {
+      PORTA &= ~(1 << PIN_CH0); // Ensure pin is low after burst
+    }
+  }
+ 
+  // --- Channel 1 Firing Logic ---
+  if (master_ticks >= delayProfile[1]) {
+    if (halfCyclesDone[1] < (cyclesPerBurst * 2)) {
+      PORTA ^= (1 << PIN_CH1);
+      halfCyclesDone[1]++;
+    } else {
+      PORTA &= ~(1 << PIN_CH1);
+    }
+  }
+
+
+  // --- Channel 2 Firing Logic ---
+  if (master_ticks >= delayProfile[2]) {
+    if (halfCyclesDone[2] < (cyclesPerBurst * 2)) {
+      PORTA ^= (1 << PIN_CH2);
+      halfCyclesDone[2]++;
+    } else {
+      PORTA &= ~(1 << PIN_CH2);
+    }
+  }
+
+
+  master_ticks++;
+
+
+  // Reset master ticks for the next repetition period
+  if (master_ticks >= repetitionPeriodTicks) {
+    master_ticks = 0;
+  }
+}
+
+
+
+
+
+
+
