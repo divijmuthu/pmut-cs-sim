@@ -1,0 +1,66 @@
+# Ignore everything in root except specific directories
+/*
+!.gitignore
+!matlab/
+!m_files/
+!README.md
+!README*.md
+
+# Ignore system files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Ignore MATLAB autosave files
+*.asv
+
+# Ignore large data files
+*.h5
+*.mat
+*.csv
+
+# Ignore output directories (but allow matlab subdirectories)
+**/output/
+**/*_output/
+**/*_output_*/
+
+# Ignore images
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.gif
+
+# Ignore other common files
+*.html
+*.xlsx
+*.odp
+*.xcf
+*.ino
+*.txt
+
+# But allow matlab directory structure and .m files
+!matlab/
+!matlab/**/
+!matlab/**/*.m
+
+# Allow m_files directory and .m files only
+!m_files/
+!m_files/**/
+!m_files/**/*.m
+# But ignore images in m_files
+m_files/**/*.png
+m_files/**/*.jpg
+m_files/**/*.jpeg
+m_files/**/*.pdf

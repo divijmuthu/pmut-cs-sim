@@ -1,21 +1,6 @@
-% Advanced_pMUT_CS_Recon_v6.0.0_TimeDelayCoding.m
-%
-% Description:
-% This version marks a significant change in the H-matrix generation strategy,
-% moving from phase-coding to time-delay coding.
-%
-% Key Changes:
-% 1. The high-energy chirp burst is now defined as the transducer's primary
-%    impulse response via xdc_impulse().
-% 2. The acquisition loop now uses xdc_focus_times() to apply a random
-%    time delay to each of the 3 active pMUTs for each acquisition.
-% 3. The ele_waveform() method is no longer used for coding.
-%
-% This approach is inspired by the successful coding mechanism in the
-% reference Ensemble.m script and aims to improve H-matrix conditioning.
-% All other parameters (geometry, grid, SNR, reconstruction algorithms)
-% are kept consistent with v5.7.0 for direct comparison.
-%
+
+% Uses Field II library, time-based delay profiles for the transducers
+% to build an incoherent H matrix
 clearvars; clc; close all;
 
 % --- Initialize Field II ---
@@ -44,10 +29,10 @@ grid_depth_end_mm = 350;    % End imaging at (mm)
 grid_step_mm = 4;           % Pixel size (mm)
 
 % --- SIMULATION CONTROL PARAMETERS ---
-R_acquisitions = 50; % more ofc slower but marked improvement!
+R_acquisitions = 50; % more --> slower but marked improvement!
 excitation_amplitude = 500;
-electronic_SNR_db = 90; % not bad even with 60 lol
-max_delay_us = 20;          % Maximum random delay in microseconds for coding
+electronic_SNR_db = 90;
+max_delay_us = 20;  % Maximum random delay in microseconds for coding
 
 % --- Reconstruction Algorithm Parameters (Defaults) ---
 maxItersCG_main = 1000;
@@ -56,9 +41,9 @@ numItersADMM = 100;
 rho_admm = 10;
 lambda_tv_reg = 0.1;
 % l_tv_reg = 0.1 produced excellent results
-% more ADMM iters of 200 looks good but slow lol
+% more ADMM iters of 200 looks better, performance hit
 % lowered rho_admm to 1, faster to reach but worse peak, 10 was fine, 50
-% not much better eiether
+% not much better either
 
 fprintf('--- Key Simulation Parameters ---\n');
 fprintf('pMUT Width: %g mm, Spacing: %g mm\n', pMUT_width_mm, pMUT_spacing_mm);
@@ -172,9 +157,6 @@ for r_acq = 1:R_acquisitions
     end
 end
 fprintf('\n');
-
-% The rest of the script is identical to v5.7.0: H-assembly, scene generation,
-% noise, PCG and ADMM reconstruction, and plotting.
 
 %% Assemble Full H Matrix with Interpolation and Alignment
 fprintf('\n--- Assembling Full H Matrix ---\n');

@@ -1,0 +1,103 @@
+% =========================================================================
+% H-Matrix Diagnostic Script v1.0
+%
+% Description:
+% This script is designed to load and analyze a pre-computed H matrix
+% from the main reconstruction script. It generates several diagnostic
+% plots to help visualize and validate the properties of the forward model.
+%
+% Instructions:
+% 1. Run the main reconstruction script (e.g., v13.2) and let it complete
+%    the "Build H Matrix" section.
+% 2. Save the MATLAB workspace to a .mat file (e.g., 'H_matrix_workspace.mat').
+% 3. Run this script and select the saved .mat file.
+% =========================================================================
+
+clear; clc; close all;
+
+%% --- 1. Load Workspace File ---
+disp('--- Loading Workspace File ---');
+[file, path] = uigetfile('*.mat', 'Select the .mat file containing the H matrix and parameters');
+if isequal(file, 0)
+    disp('User selected Cancel');
+    return;
+else
+    disp(['User selected: ', fullfile(path, file)]);
+    load(fullfile(path, file), 'H', 'K_per_acq', 'num_acquisitions', 'imageResolution', 'x_coords_img', 'z_coords_img', 'N_pixels');
+end
+
+% Check if necessary variables were loaded
+if ~exist('H', 'var') || ~exist('K_per_acq', 'var')
+    error('The selected .mat file does not contain the required H matrix or parameters.');
+end
+
+fprintf('H matrix loaded successfully. Size: %d x %d\n', size(H, 1), size(H, 2));
+
+%% --- 2. Diagnostic Plot 1: Spatial Impulse Response (Single Column) ---
+disp('--- Generating Plot 1: Spatial Impulse Response ---');
+
+% Select a pixel from the center of the imaging grid to visualize
+center_pixel_z_idx = floor(imageResolution(1) / 2);
+center_pixel_x_idx = floor(imageResolution(2) / 2);
+center_pixel_flat_idx = sub2ind(imageResolution, center_pixel_z_idx, center_pixel_x_idx);
+
+% Extract the full column corresponding to this pixel
+h_center_pixel = H(:, center_pixel_flat_idx);
+
+% Create a time axis for the full concatenated signal
+t_axis_full = (0:length(h_center_pixel)-1) / fs * 1e6; % in microseconds
+
+figure;
+plot(t_axis_full, h_center_pixel);
+title(sprintf('Spatial Impulse Response (Echo from Center Pixel %d)', center_pixel_flat_idx));
+xlabel('Time (us)');
+ylabel('Simulated Amplitude');
+grid on;
+axis tight;
+xlim([0 t_axis_full(end)]);
+disp('This plot shows the simulated echo from a single point in space over all acquisitions.');
+disp('You should see a series of pulses with varying time delays.');
+
+%% --- 3. Diagnostic Plot 2: System Energy Map ---
+disp('--- Generating Plot 2: System Energy Map ---');
+
+% Calculate the L2-norm (energy) of each column
+column_energies = vecnorm(H, 2, 1);
+
+% Reshape the energy vector back into a 2D image
+energy_map = reshape(column_energies, imageResolution);
+
+figure;
+imagesc(x_coords_img*100, z_coords_img*100, energy_map);
+title('System Energy Map (Sensitivity)');
+xlabel('X Position (cm)');
+ylabel('Z Position (cm)');
+colorbar;
+colormap('hot');
+axis image;
+set(gca, 'YDir', 'normal');
+disp('This plot shows the sensitivity of the system. Brighter areas are where the system has higher energy.');
+
+%% --- 4. Diagnostic Plot 3: Singular Value Decay ---
+disp('--- Generating Plot 3: Singular Value Decay ---');
+disp('  Calculating singular values... (This may take a moment)');
+
+% For very large matrices, calculating all singular values is slow.
+% We can approximate by taking a subset of columns.
+num_sv_cols = min(1000, N_pixels);
+H_subset = H(:, 1:num_sv_cols);
+
+tic;
+S = svd(H_subset, 'econ');
+toc;
+
+figure;
+semilogy(S, 'LineWidth', 1.5);
+title('Singular Value Decay of H Matrix');
+xlabel('Singular Value Index');
+ylabel('Magnitude');
+grid on;
+axis tight;
+disp('This plot shows the conditioning of the H matrix.');
+disp('A smooth, gradual decay is a good sign for compressed sensing.');
+

@@ -141,7 +141,7 @@ for r_acq=1:R_acquisitions
     fprintf('Calculating Acquisition %d/%d...\n',r_acq,R_acquisitions);
     for p_idx=1:num_active
         current_rand_phase=2*pi*rand();
-        analytic_signal=hilbert(base_chirp_to_modulate);
+        analytic_signal=hilanabert(base_chirp_to_modulate);
         phase_shifted_analytic=analytic_signal*exp(1i*current_rand_phase);
         current_pmut_waveform=real(phase_shifted_analytic);
         ele_waveform(pMUT_Aperture,p_idx,current_pmut_waveform);

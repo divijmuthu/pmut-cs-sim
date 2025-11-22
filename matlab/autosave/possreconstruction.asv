@@ -1,0 +1,186 @@
+% =========================================================================
+% All-in-One Compressed Sensing Reconstruction
+%
+% Description:
+% This script performs the complete end-to-end reconstruction process.
+% 1. Loads the delay profiles (.csv) and measured echo data (.h5) from the
+%    Python physical acquisition script.
+% 2. Simulates the corresponding H-matrix using Field II.
+% 3. Reconstructs the image from the measured data using PCG and ADMM-TV.
+% =========================================================================
+
+clearvars;
+clc;
+close all;
+
+% --- Configuration: Point to your data files ---
+DELAY_PROFILE_CSV_FILE = 'pmut_delay_data.csv';
+MEASURED_DATA_H5_FILE = 'experiment_results/data_2025-07-02_14-45-47.h5';
+
+% --- Initialize Field II ---
+field_init(-1);
+
+% --- Core Physical and Simulation Constants ---
+c = 1540;                   % Speed of Sound [m/s]
+% Match the physical acquisition frequency (timebase=3 -> 125 MHz)
+fs = 125e6;                 % Sampling Frequency [Hz]
+set_field('fs', fs);
+set_field('c', c);
+fprintf('--- All-in-One Reconstruction Script ---\n');
+fprintf('Using fs = %.0f MHz to match physical acquisition.\n\n', fs/1e6);
+
+% --- Geometry and Simulation Parameters (from previous script) ---
+pMUT_width_mm = 20; pMUT_spacing_mm = 20; kerf_mm = 0.1;
+grid_width_mm = 150; grid_depth_start_mm = 250; grid_depth_end_mm = 350; grid_step_mm = 4;
+excitation_amplitude = 500;
+
+% --- Convert mm to meters ---
+pMUT_width = pMUT_width_mm/1000; pMUT_height = pMUT_width; kerf = kerf_mm/1000;
+d_spacing = pMUT_spacing_mm/1000; grid_width = grid_width_mm/1000;
+grid_depth_start = grid_depth_start_mm/1000; grid_depth_end = grid_depth_end_mm/1000;
+grid_step = grid_step_mm/1000;
+
+% --- Define Imaging Grid ---
+x_coords_img = -grid_width/2 : grid_step : grid_width/2;
+z_coords_img = grid_depth_start : grid_step : grid_depth_end;
+[X_mesh, Z_mesh] = meshgrid(x_coords_img, z_coords_img);
+Y_mesh = zeros(size(X_mesh));
+N_pixels = numel(X_mesh);
+imageResolution = [length(z_coords_img), length(x_coords_img)];
+fprintf('Imaging Grid: %d pixels (%d axial x %d lateral).\n', N_pixels, imageResolution(1), imageResolution(2));
+
+% --- Define pMUT Aperture ---
+% (Code from previous script is unchanged)
+triangle_side_length = d_spacing; R_circ = triangle_side_length / sqrt(3);
+pos1 = [R_circ, 0, 0]; pos2 = [R_circ * cos(2*pi/3), R_circ * sin(2*pi/3), 0];
+pos3 = [R_circ * cos(4*pi/3), R_circ * sin(4*pi/3), 0];
+desired_positions = [pos1; pos2; pos3]; num_active_intended = size(desired_positions, 1);
+num_x_grid = 7; num_y_grid = 7;
+physical_element_centers = zeros(num_x_grid * num_y_grid, 3);
+element_no_grid_map = 0;
+center_offset_x = (num_x_grid - 1) / 2 * (pMUT_width + kerf);
+center_offset_y = (num_y_grid - 1) / 2 * (pMUT_height + kerf);
+for iy = 1:num_y_grid, y_pos_el = (iy - 1) * (pMUT_height + kerf) - center_offset_y;
+for ix = 1:num_x_grid, x_pos_el = (ix - 1) * (pMUT_width + kerf) - center_offset_x;
+element_no_grid_map = element_no_grid_map + 1;
+physical_element_centers(element_no_grid_map, :) = [x_pos_el, y_pos_el, 0]; end, end
+active_indices_linear = zeros(num_active_intended, 1);
+for i = 1:num_active_intended, distances = sum((physical_element_centers - desired_positions(i, :)).^2, 2);
+[~, min_idx] = min(distances); active_indices_linear(i) = min_idx; end
+active_indices_linear = unique(active_indices_linear); num_active = length(active_indices_linear);
+fprintf('Successfully mapped %d unique active pMUTs.\n', num_active);
+enabled_matrix = zeros(num_y_grid, num_x_grid);
+[row_indices, col_indices] = ind2sub([num_y_grid, num_x_grid], active_indices_linear);
+for i = 1:num_active, enabled_matrix(row_indices(i), col_indices(i)) = 1; end
+pMUT_Aperture = xdc_2d_array(num_x_grid, num_y_grid, pMUT_width, pMUT_height, kerf, kerf, enabled_matrix, 1, 1, [0 0 100e-3]);
+
+% --- Define Impulse Response ---
+f_start_chirp = 10e3; f_end_chirp = 200e3; burst_duration = 0.02e-3;
+t_burst_vec = 0 : 1/fs : burst_duration;
+synth_burst_base = chirp(t_burst_vec, f_start_chirp, t_burst_vec(end), f_end_chirp, 'linear');
+synth_burst_windowed = synth_burst_base .* tukeywin(length(t_burst_vec), 0.25)';
+impulse_response_waveform = synth_burst_windowed * excitation_amplitude;
+xdc_impulse(pMUT_Aperture, impulse_response_waveform);
+xdc_excitation(pMUT_Aperture, 1);
+
+%% Load Experimental Data (Delays and Measured Echos)
+fprintf('\n--- Loading Experimental Data ---\n');
+% Load Delays
+if ~exist(DELAY_PROFILE_CSV_FILE, 'file'), error('Delay CSV not found: %s', DELAY_PROFILE_CSV_FILE); end
+delay_profiles_us_full = readmatrix(DELAY_PROFILE_CSV_FILE);
+R_acquisitions = size(delay_profiles_us_full, 1);
+delay_profiles_us = delay_profiles_us_full(:, 1:num_active);
+fprintf('Loaded %d delay profiles for %d active elements.\n', R_acquisitions, num_active);
+
+% Load Measured Echo Data 'u'
+if ~exist(MEASURED_DATA_H5_FILE, 'file'), error('HDF5 data file not found: %s', MEASURED_DATA_H5_FILE); end
+echo_data_matrix = h5read(MEASURED_DATA_H5_FILE, '/echo_data');
+% The data is saved as (samples, acquisitions), transpose and flatten it.
+u_measured_signal = reshape(echo_data_matrix', [], 1);
+total_samples_per_acq = size(echo_data_matrix, 1);
+fprintf('Loaded measured echo data u. Total elements: %d\n', length(u_measured_signal));
+
+%% Generate H-Matrix Matching the Measured Data
+fprintf('\n--- Generating H Matrix ---\n');
+hydrophone_positions_img = [X_mesh(:), Y_mesh(:), Z_mesh(:)];
+all_hhp_data = cell(R_acquisitions, 1);
+all_start_times = zeros(R_acquisitions, 1);
+for r_acq = 1:R_acquisitions
+    fprintf('Simulating Acquisition %d/%d...\n', r_acq, R_acquisitions);
+    delay_vector_s = delay_profiles_us(r_acq, :) / 1e6;
+    xdc_focus_times(pMUT_Aperture, 0, delay_vector_s);
+    [hhp_r, start_time_r] = calc_hhp(pMUT_Aperture, pMUT_Aperture, hydrophone_positions_img);
+    all_hhp_data{r_acq} = hhp_r;
+    all_start_times(r_acq) = start_time_r;
+end
+
+%% Assemble Full H Matrix
+fprintf('\n--- Assembling Full H Matrix ---\n');
+% *** FIX APPLIED HERE ***
+% Create a common time axis that exactly matches the length of one physical acquisition
+H_assembled = zeros(total_samples_per_acq * R_acquisitions, N_pixels);
+for r_acq = 1:R_acquisitions
+    hhp_current = all_hhp_data{r_acq};
+    start_time_current = all_start_times(r_acq);
+    K_current = size(hhp_current, 1);
+    
+    if K_current > 0
+        t_sim_axis = start_time_current + (0:(K_current-1))/fs;
+        % Create the target time axis for this acquisition chunk
+        t_target_axis = (0:(total_samples_per_acq-1))/fs;
+        
+        hhp_aligned_r = interp1(t_sim_axis, hhp_current, t_target_axis, 'linear', 0);
+        
+        start_row = (r_acq-1) * total_samples_per_acq + 1;
+        end_row = r_acq * total_samples_per_acq;
+        H_assembled(start_row:end_row, :) = hhp_aligned_r;
+    end
+end
+H = H_assembled;
+M = size(H, 1);
+N = N_pixels;
+fprintf('Final Assembled H Matrix: %d rows (M) x %d columns (N).\n', M, N);
+if M ~= length(u_measured_signal)
+    error('FATAL: Final H matrix rows (%d) do not match measured data length (%d)!', M, length(u_measured_signal));
+end
+
+%% --- Reconstruction Algorithms (from your original script) ---
+fprintf('\n--- Starting Reconstruction ---\n');
+A_matrix = H;
+b_vector = u_measured_signal;
+maxItersCG_main = 1000; tolCG_main = 1e-8;
+
+% --- Least Norm solution with PCG ---
+fprintf('  Calculating Least Norm (PCG) Solution...\n');
+tic;
+Afun = @(x) A_matrix * x;
+Atfun = @(y) A_matrix' * y;
+AAtfun_pcg = @(y_vec) Afun(Atfun(y_vec));
+[y_sol, flag_cg_main, ~, iter_cg_main] = pcg(AAtfun_pcg, b_vector(:), tolCG_main, maxItersCG_main);
+x_pcg_img_vec = Atfun(y_sol);
+runtime_pcg = toc;
+fprintf('  PCG: Finished in %.2f s, Iters Used=%d\n', runtime_pcg, iter_cg_main);
+
+x_pcg_proc = real(x_pcg_img_vec);
+x_pcg2D = reshape(x_pcg_proc, imageResolution);
+
+%% --- Plot Final Reconstruction ---
+figure(1);
+clf;
+imagesc(x_coords_img, z_coords_img, x_pcg2D);
+axis image;
+colormap gray;
+colorbar;
+xlabel('Lateral Position (m)');
+ylabel('Axial Position (m)');
+title(sprintf('Reconstructed Image (PCG)\n%d Acquisitions', R_acquisitions));
+set(gca, 'YDir', 'normal', 'FontSize', 12);
+set(gcf, 'Color', 'w');
+
+fprintf('\n--- Reconstruction Complete ---\n');
+
+%% End Field II Simulation
+if exist('field_end', 'file') == 2
+    field_end;
+    disp('Field II ended.');
+end
