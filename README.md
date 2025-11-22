@@ -1,6 +1,6 @@
-Check "m files" for added simulations
-These indicate reconstruction viability under various conditions including poor performance for some alternative methods
-Overall project is still WIP, simulations migrated to Python for easier logic
+Check "m files" and "matlab" for contributions.
+These indicate reconstruction viability under various conditions including poor performance for some alternative methods.
+Overall project is still WIP, simulations migrated to Python for easier logic.
 
 Credit to William Meng's project and its relevant acknowledgments, especially P. Kruizinga et al.'s paper as it was greatly informative to our own approaches:
 # Single-Element Ultrasound Imaging with Compressed Sensing
