@@ -1,5 +1,8 @@
-check m files
+Check "m files" for added simulations
+These indicate reconstruction viability under various conditions including poor performance for some alternative methods
+Overall project is still WIP, simulations migrated to Python for easier logic
 
+Credit to William Meng's project and its relevant acknowledgments, especially P. Kruizinga et al.'s paper as it was greatly informative to our own approaches:
 # Single-Element Ultrasound Imaging with Compressed Sensing
 William Meng  
 wlmeng@stanford.edu  
@@ -9,26 +12,7 @@ March 19, 2021
 A current version of the code can be found in the [Github repository](https://github.com/wlmeng11/ee367project).
 Please see the [project page on my website](https://williammeng.com/ee367.html) for additional media.
 
-# Installation
-## MATLAB
-Make sure you have a recent version of [MATLAB](https://www.mathworks.com/products/matlab.html) installed.
-
-## Field II
-This project utilizes the Field II ultrasound simulation library.
-Please download and install the appropriate version of Field II from [here](https://field-ii.dk/?./downloading_8_20.html).
-
-To install the library, you will have to add the Field II subdirectory to your MATLAB path.
-You can do this by right-clicking the Field II subdirectory in MATLAB's file explorer, and then choosing *Add to Path -> Selected Folders*.
-
-# Usage
-A few versions of the script are provided:
-
-* *NoMask.m* - Simulation and reconstruction without a delay mask. Some information about the scene can still be reconstructed due to non-uniformity in the near-field of the transducer.
-* *SingleRotation.m* - Simulation and reconstruction with a delay mask, sampled with only a single rotation. The reconstructed image looks accurate in terms of features, but there is a lot of background noise.
-* *MultiRotation.m* - Simulation and reconstruction with a delay mask rotated multiple times. With R=4 rotations, the reconstructed image looks very good.
-
-The key parameters (R, electronic SNR, etc.) can be adjusted at the top of the file.
-When you run each script in MATLAB, it will display some figures and save them as images in your current working directory.
+...
 
 # Acknowledgements
 The techniques used in this project are primarily based on the following [paper](https://advances.sciencemag.org/content/3/12/e1701423):
